@@ -246,6 +246,12 @@ class LayoutAssignment : public HloPassInterface {
       const ResultLayoutConstraint& layout_constraint,
       LayoutConstraints* constraints);
 
+  // Called after layouts of an instruction have been finalized to allow
+  // subclasses to check for platform specific assumptions.
+  virtual Status Verify(const HloInstruction* instruction) {
+    return Status::OK();
+  }
+
   // Propagates a buffer layout constraint into the operands that use it.
   Status PropagateBufferConstraintToUses(
       const BufferLayoutConstraint& layout_constraint,
@@ -257,49 +263,6 @@ class LayoutAssignment : public HloPassInterface {
   Status PropagateUseConstraintToDefs(const ShapeLayout& shape_layout,
                                       const HloInstruction* instruction,
                                       LayoutConstraints* constraints);
-
- private:
-  // Adds constraints which must be satisfied for correctness on all
-  // backends. Called once prior to propagating constraints.
-  Status AddMandatoryConstraints(const ComputationLayout& computation_layout,
-                                 HloComputation* computation,
-                                 LayoutConstraints* constraints);
-
-  // This method can be overridden to add backend-specific constraints to the
-  // layout of the instructions of a computation. This method is called after
-  // all mandatory constraints have been added via AddMandatoryConstraints
-  // and before propagating constraints.
-  virtual Status AddBackendConstraints(LayoutConstraints* constraints) {
-    return Status::OK();
-  }
-
-  // This method can be overriden to mark instructions as requiring the operands
-  // to have the same layout as the result, for performance or correctness. This
-  // will propagate constraints through the instruction from the result into the
-  // operands.
-  virtual bool InstructionRequiresInputLayoutEqualToOutputLayout(
-      const HloInstruction* instruction) {
-    return false;
-  }
-
-  // Construct contraints and assign layouts to all instructions in the
-  // computation satisfying the given ComputationLayout. Layouts constraints are
-  // added, then propagated until all LogicalBuffers in the computation are
-  // constrained.
-  Status RunOnComputation(const ComputationLayout& computation_layout,
-                          HloComputation* computation);
-
-  // Assign layouts to the instructions of a computation which satisfy the given
-  // layout constraints. Copies may be added to satisfy the constraints. The
-  // given LayoutConstraints must have layout constraints every logical buffer
-  // in the computation.
-  Status AssignLayouts(const LayoutConstraints& constraints,
-                       HloComputation* computation);
-
-  // Propagates layout constraints from a set of initial constraints in order to
-  // minimize the local cost of the computation. This propagation is *not*
-  // required for correctness.
-  Status PropagateConstraints(LayoutConstraints* constraints);
 
   // Chooses a layout of operand `operand_no` of `instruction` that minimizes
   // the cost of `instruction`. `output_layout` is the layout of `instruction`.
@@ -316,8 +279,44 @@ class LayoutAssignment : public HloPassInterface {
       const Layout& operand_layout, const HloInstruction* user,
       int64 operand_no);
 
+ private:
+  // Adds constraints which must be satisfied for correctness on all
+  // backends. Called once prior to propagating constraints.
+  Status AddMandatoryConstraints(const ComputationLayout& computation_layout,
+                                 HloComputation* computation,
+                                 LayoutConstraints* constraints);
+
+  // This method can be overridden to add backend-specific constraints to the
+  // layout of the instructions of a computation. This method is called after
+  // all mandatory constraints have been added via AddMandatoryConstraints
+  // and before propagating constraints.
+  virtual Status AddBackendConstraints(LayoutConstraints* constraints) {
+    return Status::OK();
+  }
+
+  // Construct contraints and assign layouts to all instructions in the
+  // computation satisfying the given ComputationLayout. Layouts constraints are
+  // added, then propagated until all LogicalBuffers in the computation are
+  // constrained.
+  Status RunOnComputation(const ComputationLayout& computation_layout,
+                          const TuplePointsToAnalysis& points_to_analysis,
+                          HloComputation* computation);
+
+  // Assign layouts to the instructions of a computation which satisfy the given
+  // layout constraints. Copies may be added to satisfy the constraints. The
+  // given LayoutConstraints must have layout constraints every logical buffer
+  // in the computation.
+  Status AssignLayouts(const LayoutConstraints& constraints,
+                       HloComputation* computation);
+
+  // Propagates layout constraints from a set of initial constraints in order to
+  // minimize the local cost of the computation. This propagation is *not*
+  // required for correctness.
+  Status PropagateConstraints(LayoutConstraints* constraints);
+
   ComputationLayout* entry_computation_layout_;
 
+ protected:
   // Map containing the layouts of all computations assigned so
   // far. Computations are handled in a topological sort where computations are
   // handled before their caller instructions so the layouts of caller

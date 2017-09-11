@@ -117,6 +117,7 @@ typedef enum TF_DataType {
   TF_COMPLEX128 = 18,  // Double-precision complex
   TF_HALF = 19,
   TF_RESOURCE = 20,
+  TF_VARIANT = 21,
 } TF_DataType;
 
 // TF_DataTypeSize returns the sizeof() for the underlying type corresponding
@@ -356,12 +357,20 @@ typedef struct TF_Output {
   int index;  // The index of the output within oper.
 } TF_Output;
 
+// TF_Function is a grouping of operations with defined inputs and outputs.
+// Once created and added to graphs, functions can be invoked by creating an
+// operation whose operation type matches the function name.
+typedef struct TF_Function TF_Function;
+
+// Function definition options. TODO(iga): Define and implement
+typedef struct TF_FunctionOptions TF_FunctionOptions;
+
 // Sets the shape of the Tensor referenced by `output` in `graph` to
 // the shape described by `dims` and `num_dims`.
 //
-// If the number of dimensions is unknown, `num_dims` must be
-// set to -1 and dims can be null. If a dimension is unknown,
-// the corresponding entry in the `dims` array must be -1.
+// If the number of dimensions is unknown, `num_dims` must be set to
+// -1 and `dims` can be null. If a dimension is unknown, the
+// corresponding entry in the `dims` array must be -1.
 //
 // This does not overwrite the existing shape associated with `output`,
 // but merges the input shape with the existing shape.  For example,
@@ -913,6 +922,15 @@ TF_CAPI_EXPORT extern void TF_GraphImportGraphDef(
     TF_Graph* graph, const TF_Buffer* graph_def,
     const TF_ImportGraphDefOptions* options, TF_Status* status);
 
+// Add `function` to graph `g`. Once `function` is added to `g`,
+// it can be called by creating an operation using the function's name.
+//
+// If successful, status is set to OK and function is added to g
+// Otherwise, status is set to the encountered error and g is unmodified
+TF_CAPI_EXPORT extern void TF_GraphAddFunction(TF_Graph* g,
+                                               const TF_Function* function,
+                                               TF_Status* status);
+
 // Note: The following function may fail on very large protos in the future.
 
 TF_CAPI_EXPORT extern void TF_OperationToNodeDef(TF_Operation* oper,
@@ -961,8 +979,9 @@ typedef struct TF_WhileParams {
 // - Reference-type inputs
 // - Directly referencing external tensors from the cond/body graphs (this is
 //   possible in the Python API)
-TF_WhileParams TF_NewWhile(TF_Graph* g, TF_Output* inputs, int ninputs,
-                           TF_Status* status);
+TF_CAPI_EXPORT extern TF_WhileParams TF_NewWhile(TF_Graph* g, TF_Output* inputs,
+                                                 int ninputs,
+                                                 TF_Status* status);
 
 // Builds the while loop specified by `params` and returns the output tensors of
 // the while loop in `outputs`. `outputs` should be allocated to size
@@ -972,13 +991,14 @@ TF_WhileParams TF_NewWhile(TF_Graph* g, TF_Output* inputs, int ninputs,
 //
 // Either this or TF_AbortWhile() must be called after a successful
 // TF_NewWhile() call.
-void TF_FinishWhile(const TF_WhileParams* params, TF_Status* status,
-                    TF_Output* outputs);
+TF_CAPI_EXPORT extern void TF_FinishWhile(const TF_WhileParams* params,
+                                          TF_Status* status,
+                                          TF_Output* outputs);
 
 // Frees `params`s resources without building a while loop. `params` is no
 // longer valid after this returns. Either this or TF_FinishWhile() must be
 // called after a successful TF_NewWhile() call.
-void TF_AbortWhile(const TF_WhileParams* params);
+TF_CAPI_EXPORT extern void TF_AbortWhile(const TF_WhileParams* params);
 
 // Adds operations to compute the partial derivatives of sum of `y`s w.r.t `x`s,
 // i.e., d(y_1 + y_2 + ...)/dx_1, d(y_1 + y_2 + ...)/dx_2...
@@ -994,8 +1014,108 @@ void TF_AbortWhile(const TF_WhileParams* params);
 // supports. See
 // https://www.tensorflow.org/code/tensorflow/cc/gradients/README.md
 // for instructions on how to add C++ more gradients.
-void TF_AddGradients(TF_Graph* g, TF_Output* y, int ny, TF_Output* x, int nx,
-                     TF_Output* dx, TF_Status* status, TF_Output* dy);
+TF_CAPI_EXPORT void TF_AddGradients(TF_Graph* g, TF_Output* y, int ny,
+                                    TF_Output* x, int nx, TF_Output* dx,
+                                    TF_Status* status, TF_Output* dy);
+
+// Create a TF_Function from a TF_Graph
+//
+// Params:
+//  fn_body - the graph whose operations (or subset of whose operations) will be
+//            converted to TF_Function.
+//  fn_name - the name of the new TF_Function. Should match the operation
+//            name (OpDef.name) regexp [A-Z][A-Za-z0-9_.\\-/]* and be distinct
+//            from other operation names (at least those registered in graphs
+//            where this function will be used).
+//            TODO(iga): Allow null in here and have C API come up with
+//            a unique name with high probability (similarly to
+//            _create_hash_str in function.py)
+//  num_opers - `num_opers` contains the number of elements in the `opers` array
+//              or a special value of -1 meaning that no array is given.
+//              The distinction between an empty array of operations and no
+//              array of operations is necessary to distinguish the case of
+//              creating a function with no body (e.g. identity or permutation)
+//              and the case of creating a function whose body contains all
+//              the nodes in the graph (except for the automatic skipping, see
+//              below).
+//  opers - Array of operations to become the body of the function or null.
+//          - If no array is given (`num_opers`  = -1), all the
+//          operations in `fn_body` will become part of the function
+//          except operations referenced in `inputs`. These operations
+//          must have a single output (these operations are typically
+//          placeholders created for the sole purpose of representing
+//          an input. We can relax this constraint if there are
+//          compelling use cases).
+//          - If an array is given (`num_opers` >= 0), all operations
+//          in it will become part of the function. In particular, no
+//          automatic skipping of dummy input operations is performed.
+//  ninputs - number of elements in `inputs` array
+//  inputs - array of TF_Outputs that specify the inputs to the function.
+//           If `ninputs` is zero (the function takes no inputs), `inputs`
+//           can be null. The names used for function inputs are normalized
+//           names of the operations (usually placeholders) pointed to by
+//           `inputs`. These operation names should start with a letter.
+//           Normalization will convert all letters to lowercase and
+//           non-alphanumeric characters to '_' to make resulting names match
+//           the "[a-z][a-z0-9_]*" pattern for operation argument names.
+//           `inputs` cannot contain the same tensor twice.
+//  noutputs - number of elements in `outputs` array
+//  outputs - array of TF_Outputs that specify the outputs of the function.
+//            If `noutputs` is zero (the function returns no outputs), `outputs`
+//            can be null. `outputs` can contain the same tensor more than once.
+//  output_names - The names of the function's outputs. `output_names` array
+//                 must either have the same length as `outputs`
+//                 (i.e. `noutputs`) or be null. In the former case,
+//                 the names should match the regular expression for ArgDef
+//                 names - "[a-z][a-z0-9_]*". In the latter case,
+//                 names for outputs will be generated automatically.
+//  opts - various options for the function, e.g. XLA's inlining control.
+//  status - Set to OK on success and an appropriate error on failure.
+//
+// Note that when the same TF_Output is listed as both an input and an output,
+// the corresponding function's output will equal to this input,
+// instead of the original node's output.
+//
+// Callers must also satisfy the following constraints:
+// - `inputs` cannot refer to TF_Outputs within a control flow context. For
+//   example, one cannot use the output of "switch" node as input.
+// - No TF_Output of a function (inside any of `inputs`, `outputs`, `fn_body`)
+//   is allowed to have a reference type. Reference types are not exposed
+//   through C API and are being deprecated.
+// - Every node in the function's body must have all of its inputs (including
+//   control inputs). In other words, for every node in the body, each input
+//   must be either listed in `inputs` or must come from another node in
+//   the body. In particular, it is an error to have a control edge going from
+//   a node outside of the body into a node in the body. This applies to control
+//   edges going from nodes referenced in `inputs` to nodes in the body when
+//   the former nodes are not in the body (automatically skipped or not
+//   included in explicitly specified body).
+//
+// Returns:
+//  On successful, a newly created TF_Function instance. It must be deleted by
+//  calling TF_DeleteFunction.
+//
+//  On failure, null.
+//
+// TODO(iga): Add input_names argument and get output_names working (they are
+// currently ignored)
+TF_CAPI_EXPORT extern TF_Function* TF_GraphToFunction(
+    const TF_Graph* fn_body, const char* fn_name, int num_opers,
+    const TF_Operation* const* opers, int ninputs, const TF_Output* inputs,
+    int noutputs, const TF_Output* outputs, const char* const* output_names,
+    const TF_FunctionOptions* opts, TF_Status* status);
+
+// Write out a serialized representation of `func` (as a FunctionDef protocol
+// message) to `output_func_def` (allocated by TF_NewBuffer()).
+// `output_func_def`'s underlying buffer will be freed when TF_DeleteBuffer()
+// is called.
+//
+// May fail on very large graphs in the future.
+TF_CAPI_EXPORT extern void TF_FunctionToFunctionDef(TF_Function* func,
+                                                    TF_Buffer* output_func_def,
+                                                    TF_Status* status);
+
+TF_CAPI_EXPORT extern void TF_DeleteFunction(TF_Function*);
 
 // TODO(josh11b): Register OpDef, available to all operations added
 // to this graph.
@@ -1032,7 +1152,7 @@ TF_CAPI_EXPORT extern TF_Session* TF_NewSession(TF_Graph* graph,
 //
 // If successful, populates `graph` with the contents of the Graph and
 // `meta_graph_def` with the MetaGraphDef of the loaded model.
-TF_Session* TF_LoadSessionFromSavedModel(
+TF_CAPI_EXPORT extern TF_Session* TF_LoadSessionFromSavedModel(
     const TF_SessionOptions* session_options, const TF_Buffer* run_options,
     const char* export_dir, const char* const* tags, int tags_len,
     TF_Graph* graph, TF_Buffer* meta_graph_def, TF_Status* status);
@@ -1098,8 +1218,7 @@ TF_CAPI_EXPORT extern void TF_SessionRun(
 // needed.
 //
 // On failure, out_status contains a tensorflow::Status with an error
-// message.
-// NOTE: This is EXPERIMENTAL and subject to change.
+// message. *handle is set to nullptr.
 TF_CAPI_EXPORT extern void TF_SessionPRunSetup(
     TF_Session*,
     // Input names
@@ -1115,7 +1234,6 @@ TF_CAPI_EXPORT extern void TF_SessionPRunSetup(
 
 // Continue to run the graph with additional feeds and fetches. The
 // execution state is uniquely identified by the handle.
-// NOTE: This is EXPERIMENTAL and subject to change.
 TF_CAPI_EXPORT extern void TF_SessionPRun(
     TF_Session*, const char* handle,
     // Input tensors
@@ -1179,6 +1297,55 @@ TF_CAPI_EXPORT extern void TF_PRun(TF_DeprecatedSession*, const char* handle,
                                    TF_Tensor** outputs, int noutputs,
                                    const char** target_oper_names, int ntargets,
                                    TF_Status*);
+
+typedef struct TF_DeviceList TF_DeviceList;
+
+// Lists all devices in a TF_Session.
+//
+// Caller takes ownership of the returned TF_DeviceList* which must eventually
+// be freed with a call to TF_DeleteDeviceList.
+TF_CAPI_EXPORT extern TF_DeviceList* TF_SessionListDevices(TF_Session* session,
+                                                           TF_Status* status);
+
+// Lists all devices in a TF_Session.
+//
+// Caller takes ownership of the returned TF_DeviceList* which must eventually
+// be freed with a call to TF_DeleteDeviceList.
+TF_CAPI_EXPORT extern TF_DeviceList* TF_DeprecatedSessionListDevices(
+    TF_DeprecatedSession* session, TF_Status* status);
+
+// Deallocates the device list.
+TF_CAPI_EXPORT extern void TF_DeleteDeviceList(TF_DeviceList* list);
+
+// Counts the number of elements in the device list.
+TF_CAPI_EXPORT extern int TF_DeviceListCount(const TF_DeviceList* list);
+
+// Retrieves the full name of the device (e.g. /job:worker/replica:0/...)
+// The return value will be a pointer to a null terminated string. The caller
+// must not modify or delete the string. It will be deallocated upon a call to
+// TF_DeleteDeviceList.
+//
+// If index is out of bounds, an error code will be set in the status object,
+// and a null pointer will be returned.
+TF_CAPI_EXPORT extern const char* TF_DeviceListName(const TF_DeviceList* list,
+                                                    int index, TF_Status*);
+
+// Retrieves the type of the device at the given index.
+//
+// The caller must not modify or delete the string. It will be deallocated upon
+// a call to TF_DeleteDeviceList.
+//
+// If index is out of bounds, an error code will be set in the status object,
+// and a null pointer will be returned.
+TF_CAPI_EXPORT extern const char* TF_DeviceListType(const TF_DeviceList* list,
+                                                    int index, TF_Status*);
+
+// Retrieve the amount of memory associated with a given device.
+//
+// If index is out of bounds, an error code will be set in the status object,
+// and -1 will be returned.
+TF_CAPI_EXPORT extern int64_t TF_DeviceListMemoryBytes(
+    const TF_DeviceList* list, int index, TF_Status*);
 
 // --------------------------------------------------------------------------
 // Load plugins containing custom ops and kernels

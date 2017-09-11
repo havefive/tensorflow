@@ -27,33 +27,23 @@ namespace tensorflow {
 
 namespace {
 
-// See documentation in ../ops/iterator_ops.cc for a high-level
+// See documentation in ../ops/dataset_ops.cc for a high-level
 // description of the following op.
-class GroupByWindowDatasetOp : public OpKernel {
+class GroupByWindowDatasetOp : public UnaryDatasetOpKernel {
  public:
   explicit GroupByWindowDatasetOp(OpKernelConstruction* ctx)
-      : OpKernel(ctx), graph_def_version_(ctx->graph_def_version()) {
+      : UnaryDatasetOpKernel(ctx),
+        graph_def_version_(ctx->graph_def_version()) {
     OP_REQUIRES_OK(ctx, ctx->GetAttr("key_func", &key_func_));
     OP_REQUIRES_OK(ctx, ctx->GetAttr("reduce_func", &reduce_func_));
+    OP_REQUIRES_OK(ctx, ctx->GetAttr("window_size_func", &window_size_func_));
     OP_REQUIRES_OK(ctx, ctx->GetAttr("output_types", &output_types_));
     OP_REQUIRES_OK(ctx, ctx->GetAttr("output_shapes", &output_shapes_));
   }
 
-  void Compute(OpKernelContext* ctx) override {
-    DatasetBase* input;
-    OP_REQUIRES_OK(ctx, LookupResource(ctx, HandleFromInput(ctx, 0), &input));
-    core::ScopedUnref unref_input(input);
-
-    const Tensor* window_size_t;
-    OP_REQUIRES_OK(ctx, ctx->input("window_size", &window_size_t));
-    OP_REQUIRES(ctx, TensorShapeUtils::IsScalar(window_size_t->shape()),
-                errors::InvalidArgument("window_size must be a scalar"));
-    const int64 window_size = window_size_t->flat<int64>()(0);
-    OP_REQUIRES(
-        ctx, window_size > 0,
-        errors::InvalidArgument("Window size must be greater than zero."));
-
-    // Get captured inputs for the key and reduce functions.
+  void MakeDataset(OpKernelContext* ctx, DatasetBase* input,
+                   DatasetBase** output) override {
+    // Get captured inputs for the key, reduce, and window_size functions.
     OpInputList key_func_other_argument_inputs;
     OP_REQUIRES_OK(ctx, ctx->input_list("key_func_other_arguments",
                                         &key_func_other_argument_inputs));
@@ -71,6 +61,16 @@ class GroupByWindowDatasetOp : public OpKernel {
     for (const Tensor& t : reduce_func_other_argument_inputs) {
       reduce_func_other_arguments.push_back(t);
     }
+    OpInputList window_size_func_other_argument_inputs;
+    OP_REQUIRES_OK(ctx,
+                   ctx->input_list("window_size_func_other_arguments",
+                                   &window_size_func_other_argument_inputs));
+    std::vector<Tensor> window_size_func_other_arguments;
+    window_size_func_other_arguments.reserve(
+        window_size_func_other_argument_inputs.size());
+    for (const Tensor& t : window_size_func_other_argument_inputs) {
+      window_size_func_other_arguments.push_back(t);
+    }
     // TODO(mrry): Refactor CapturedFunction to share the runtime
     // state between multiple functions?
     std::unique_ptr<CapturedFunction> captured_key_func;
@@ -83,31 +83,30 @@ class GroupByWindowDatasetOp : public OpKernel {
         ctx, CapturedFunction::Create(ctx, reduce_func_, graph_def_version_,
                                       std::move(reduce_func_other_arguments),
                                       &captured_reduce_func));
+    std::unique_ptr<CapturedFunction> captured_window_size_func;
+    OP_REQUIRES_OK(ctx, CapturedFunction::Create(
+                            ctx, window_size_func_, graph_def_version_,
+                            std::move(window_size_func_other_arguments),
+                            &captured_window_size_func));
 
-    DatasetBase* dataset = new Dataset(
-        input, window_size, std::move(captured_key_func),
-        std::move(captured_reduce_func), output_types_, output_shapes_);
-
-    Tensor* output = nullptr;
-    OP_REQUIRES_OK(ctx, ctx->allocate_output(0, TensorShape({}), &output));
-    ResourceHandle handle = MakeResourceHandle<DatasetBase>(
-        ctx, ctx->step_container()->name(), name());
-    OP_REQUIRES_OK(ctx, CreateResource(ctx, handle, dataset));
-    output->flat<ResourceHandle>()(0) = handle;
+    *output = new Dataset(
+        input, std::move(captured_key_func), std::move(captured_reduce_func),
+        std::move(captured_window_size_func), output_types_, output_shapes_);
   }
 
  private:
   class Dataset : public DatasetBase {
    public:
-    Dataset(const DatasetBase* input, int64 window_size,
+    Dataset(const DatasetBase* input,
             std::unique_ptr<CapturedFunction> captured_key_func,
             std::unique_ptr<CapturedFunction> captured_reduce_func,
+            std::unique_ptr<CapturedFunction> captured_window_size_func,
             const DataTypeVector& output_types,
             const std::vector<PartialTensorShape>& output_shapes)
         : input_(input),
-          window_size_(window_size),
           captured_key_func_(std::move(captured_key_func)),
           captured_reduce_func_(std::move(captured_reduce_func)),
+          captured_window_size_func_(std::move(captured_window_size_func)),
           output_types_(output_types),
           output_shapes_(output_shapes) {
       input_->Ref();
@@ -115,8 +114,10 @@ class GroupByWindowDatasetOp : public OpKernel {
 
     ~Dataset() override { input_->Unref(); }
 
-    std::unique_ptr<IteratorBase> MakeIterator() const override {
-      return std::unique_ptr<IteratorBase>(new Iterator(this));
+    std::unique_ptr<IteratorBase> MakeIterator(
+        const string& prefix) const override {
+      return std::unique_ptr<IteratorBase>(
+          new Iterator({this, strings::StrCat(prefix, "::GroupByWindow")}));
     }
 
     const DataTypeVector& output_dtypes() const override {
@@ -131,12 +132,13 @@ class GroupByWindowDatasetOp : public OpKernel {
    private:
     class Iterator : public DatasetIterator<Dataset> {
      public:
-      explicit Iterator(const Dataset* dataset)
-          : DatasetIterator<Dataset>(dataset),
-            input_impl_(dataset->input_->MakeIterator()) {}
+      explicit Iterator(const Params& params)
+          : DatasetIterator<Dataset>(params),
+            input_impl_(params.dataset->input_->MakeIterator(params.prefix)) {}
 
-      Status GetNext(IteratorContext* ctx, std::vector<Tensor>* out_tensors,
-                     bool* end_of_sequence) override {
+      Status GetNextInternal(IteratorContext* ctx,
+                             std::vector<Tensor>* out_tensors,
+                             bool* end_of_sequence) override {
         mutex_lock l(mu_);
         do {
           if (current_group_iterator_) {
@@ -164,12 +166,7 @@ class GroupByWindowDatasetOp : public OpKernel {
 
             if (!end_of_input_) {
               FunctionLibraryRuntime::Options opts;
-              // Choose a step ID that is guaranteed not to clash with any
-              // Session-generated step ID. DirectSession only generates
-              // non-negative step IDs (contiguous, starting from 0), and
-              // MasterSession generates 56-bit random step IDs whose MSB is
-              // always 0, so a negative random step ID should suffice.
-              opts.step_id = -std::abs(static_cast<int64>(random::New64()));
+              opts.step_id = CapturedFunction::generate_step_id();
               opts.runner = ctx->runner();
               ScopedStepContainer step_container(
                   opts.step_id, [this, ctx](const string& name) {
@@ -195,10 +192,44 @@ class GroupByWindowDatasetOp : public OpKernel {
               }
               const int64 key = key_func_output[0].scalar<int64>()();
 
+              if (window_sizes_.find(key) == window_sizes_.end()) {
+                // Run window_size function
+                FunctionLibraryRuntime::Options opts2;
+                opts2.step_id = CapturedFunction::generate_step_id();
+                opts2.runner = ctx->runner();
+                ScopedStepContainer step_container2(
+                    opts2.step_id, [this, ctx](const string& name) {
+                      dataset()
+                          ->captured_window_size_func_->resource_manager()
+                          ->Cleanup(name)
+                          .IgnoreError();
+                    });
+                opts2.step_container = &step_container2;
+
+                // Run the window size function on the key to identify its
+                // window size.
+                std::vector<Tensor> window_size_func_output;
+                TF_RETURN_IF_ERROR(dataset()->captured_window_size_func_->Run(
+                    opts2, key_func_output, &window_size_func_output));
+
+                if (window_size_func_output.size() != 1 ||
+                    window_size_func_output[0].dtype() != DT_INT64 ||
+                    window_size_func_output[0].NumElements() != 1) {
+                  // TODO(mrry): Support non-int64 window sizes.
+                  return errors::InvalidArgument(
+                      "`window_size_func` must return a scalar int64.");
+                }
+                const int64 window_size =
+                    window_size_func_output[0].scalar<int64>()();
+                window_sizes_[key] = window_size;
+              }
+
+              const int64 window_size = window_sizes_[key];
+
               std::vector<std::vector<Tensor>>& group = groups_[key];
               group.push_back(std::move(next_input_element));
 
-              if (group.size() == dataset()->window_size_) {
+              if (group.size() == window_size) {
                 TF_RETURN_IF_ERROR(StartFlushingGroup(ctx, key));
                 break;
               }
@@ -223,12 +254,7 @@ class GroupByWindowDatasetOp : public OpKernel {
       Status StartFlushingGroup(IteratorContext* ctx, int64 key)
           EXCLUSIVE_LOCKS_REQUIRED(mu_) {
         FunctionLibraryRuntime::Options opts;
-        // Choose a step ID that is guaranteed not to clash with any
-        // Session-generated step ID. DirectSession only generates
-        // non-negative step IDs (contiguous, starting from 0), and
-        // MasterSession generates 56-bit random step IDs whose MSB is
-        // always 0, so a negative random step ID should suffice.
-        opts.step_id = -std::abs(static_cast<int64>(random::New64()));
+        opts.step_id = CapturedFunction::generate_step_id();
         opts.runner = ctx->runner();
         ScopedStepContainer step_container(
             opts.step_id, [this, ctx](const string& name) {
@@ -305,7 +331,7 @@ class GroupByWindowDatasetOp : public OpKernel {
         // Create an iterator for the dataset that was returned by
         // `f`. This transfers ownership of the dataset to the
         // iterator.
-        current_group_iterator_ = returned_dataset->MakeIterator();
+        current_group_iterator_ = returned_dataset->MakeIterator(prefix());
         return Status::OK();
       }
 
@@ -315,6 +341,7 @@ class GroupByWindowDatasetOp : public OpKernel {
       bool end_of_input_ GUARDED_BY(mu_) = false;
       std::map<int64, std::vector<std::vector<Tensor>>> groups_ GUARDED_BY(mu_);
       std::unique_ptr<IteratorBase> current_group_iterator_ GUARDED_BY(mu_);
+      std::map<int64, int64> window_sizes_ GUARDED_BY(mu_);
     };
 
     // A resource name for the temporary window dataset that is
@@ -322,9 +349,9 @@ class GroupByWindowDatasetOp : public OpKernel {
     static constexpr const char* kWindowResourceName = "__window_dataset";
 
     const DatasetBase* const input_;
-    const int64 window_size_;
     const std::unique_ptr<CapturedFunction> captured_key_func_;
     const std::unique_ptr<CapturedFunction> captured_reduce_func_;
+    const std::unique_ptr<CapturedFunction> captured_window_size_func_;
     const DataTypeVector output_types_;
     const std::vector<PartialTensorShape> output_shapes_;
   };
@@ -334,6 +361,7 @@ class GroupByWindowDatasetOp : public OpKernel {
   std::vector<PartialTensorShape> output_shapes_;
   const NameAttrList* key_func_;
   const NameAttrList* reduce_func_;
+  const NameAttrList* window_size_func_;
 };
 
 REGISTER_KERNEL_BUILDER(Name("GroupByWindowDataset").Device(DEVICE_CPU),
