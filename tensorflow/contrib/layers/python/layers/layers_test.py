@@ -434,7 +434,7 @@ class ConvolutionTest(test.TestCase):
       conv = layers_lib.convolution2d(
           images, 32, [3, 3], outputs_collections='outputs', scope='Conv')
     output_collected = ops.get_collection('outputs')[0]
-    self.assertEqual(output_collected.aliases, ['fe/Conv'])
+    self.assertEqual(output_collected.aliases, ['Conv'])
     self.assertEqual(output_collected, conv)
 
   def testCreateConvWithoutActivation(self):
@@ -1399,7 +1399,7 @@ class FlattenTest(test.TestCase):
       inputs = array_ops.placeholder(dtype=dtypes.float32)
       inputs.set_shape(tensor_shape.TensorShape((5,)))
       with self.assertRaisesRegexp(ValueError,
-                                   'must have a least 2 dimensions'):
+                                   'incompatible with the layer'):
         _layers.flatten(inputs)
 
   def testUnknownLastDim(self):
@@ -1589,7 +1589,7 @@ class FCTest(test.TestCase):
       fc = _layers.fully_connected(
           inputs, 7, outputs_collections='outputs', scope='fc')
     output_collected = ops.get_collection('outputs')[0]
-    self.assertEqual(output_collected.aliases, ['fe/fc'])
+    self.assertEqual(output_collected.aliases, ['fc'])
     self.assertEqual(output_collected, fc)
 
   def testCreateFcCreatesWeightsAndBiasesVars(self):
@@ -1784,28 +1784,40 @@ class BatchNormTest(test.TestCase):
   def testCreateOpFused(self):
     self._testCreateOp(True)
 
-  def testCreateOpBetaRegularizer(self):
+  def _testCreateOpBetaRegularizer(self, fused=True):
     height, width = 3, 3
     with self.test_session():
       reg = lambda x: 0.1 * math_ops.reduce_sum(x)
       images = np.random.uniform(size=(5, height, width, 3)).astype('f')
-      _layers.batch_norm(images, param_regularizers={'beta': reg})
+      _layers.batch_norm(images, param_regularizers={'beta': reg}, fused=fused)
       self.assertEqual(
           len(ops.get_collection(ops.GraphKeys.REGULARIZATION_LOSSES)), 1)
       beta_decay = ops.get_collection(ops.GraphKeys.REGULARIZATION_LOSSES)[0]
       self.assertEqual(beta_decay.op.name, 'BatchNorm/beta/Regularizer/mul')
 
-  def testCreateOpGammaRegularizer(self):
+  def testCreateOpBetaRegularizerFused(self):
+    self._testCreateOpBetaRegularizer(fused=True)
+
+  def testCreateOpBetaRegularizerNonFused(self):
+    self._testCreateOpBetaRegularizer(fused=False)
+
+  def _testCreateOpGammaRegularizer(self, fused=True):
     height, width = 3, 3
     with self.test_session():
       reg = lambda x: 0.1 * math_ops.reduce_sum(x)
       images = np.random.uniform(size=(5, height, width, 3)).astype('f')
       _layers.batch_norm(
-          images, param_regularizers={'gamma': reg}, scale=True)
+          images, param_regularizers={'gamma': reg}, scale=True, fused=fused)
       self.assertEqual(
           len(ops.get_collection(ops.GraphKeys.REGULARIZATION_LOSSES)), 1)
       gamma_decay = ops.get_collection(ops.GraphKeys.REGULARIZATION_LOSSES)[0]
       self.assertEqual(gamma_decay.op.name, 'BatchNorm/gamma/Regularizer/mul')
+
+  def testCreateOpGammaRegularizerFused(self):
+    self._testCreateOpGammaRegularizer(fused=True)
+
+  def testCreateOpGammaRegularizerNonFused(self):
+    self._testCreateOpGammaRegularizer(fused=False)
 
   def testCreateVariables(self):
     height, width = 3, 3
@@ -2643,6 +2655,26 @@ class BatchNormTest(test.TestCase):
       b = _layers.batch_norm(a, center=False, data_format='NCHW',
                                        zero_debias_moving_mean=True)
       sess.run(variables_lib.global_variables_initializer())
+
+  def testAdjustmentCreated(self):
+    # Tests that the adjustment is appropriately passed to and used by the core
+    # BN layer.
+    all_adjustments = []
+    def _create_adjustment(shape):
+      adjustments = [array_ops.ones(shape[-1:]), array_ops.zeros(shape[-1:])]
+      all_adjustments.extend(adjustments)
+      return adjustments
+    depth = 8
+    images = array_ops.zeros([10, 5, 5, depth])
+    output = _layers.batch_norm(
+        images,
+        is_training=True,
+        adjustment=_create_adjustment)
+    self.assertListEqual(output.shape.as_list(), images.shape.as_list())
+    self.assertEqual(len(all_adjustments), 2)
+    self.assertListEqual(all_adjustments[0].shape.as_list(), [depth])
+    self.assertListEqual(all_adjustments[1].shape.as_list(), [depth])
+
 
 class LayerNormTest(test.TestCase):
 
