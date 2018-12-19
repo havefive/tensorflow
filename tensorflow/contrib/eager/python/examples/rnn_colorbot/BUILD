@@ -3,6 +3,7 @@ licenses(["notice"])  # Apache 2.0
 package(default_visibility = ["//tensorflow:internal"])
 
 load("//tensorflow:tensorflow.bzl", "cuda_py_test")
+load("//tensorflow:tensorflow.bzl", "py_binary")
 
 py_binary(
     name = "rnn_colorbot",
@@ -11,6 +12,7 @@ py_binary(
     deps = [
         "//tensorflow:tensorflow_py",
         "//tensorflow/contrib/eager/python:tfe",
+        "//tensorflow/python/eager:context",
         "@six_archive//:six",
     ],
 )

@@ -26,7 +26,6 @@ py_library(
         "python/training/resample.py",
         "python/training/sampling_ops.py",
         "python/training/sequence_queueing_state_saver.py",
-        "python/training/sgdr_learning_rate_decay.py",
         "python/training/training.py",
         "python/training/tuner.py",
     ],
@@ -60,7 +59,8 @@ py_library(
         "//tensorflow/python:util",
         "//tensorflow/python:variable_scope",
         "//tensorflow/python:variables",
-        "//tensorflow/python/estimator:inputs_queues",
+        "//tensorflow/python/data",
+        "//tensorflow/python/estimator:estimator_py",
         "//third_party/py/numpy",
         "@six_archive//:six",
     ],
@@ -132,7 +132,7 @@ py_test(
         "//tensorflow/python:framework_ops",
         "//tensorflow/python:session",
         "//tensorflow/python:training",
-        "//tensorflow/python/estimator:inputs_queues",
+        "//tensorflow/python/estimator:estimator_py",
         "//third_party/py/numpy",
     ],
 )
@@ -286,23 +286,9 @@ py_test(
     ],
 )
 
-filegroup(
-    name = "all_files",
-    srcs = glob(
-        ["**/*"],
-        exclude = [
-            "**/METADATA",
-            "**/OWNERS",
-        ],
-    ),
-    visibility = ["//tensorflow:__subpackages__"],
-)
-
 tf_proto_library(
     name = "protos_all",
     srcs = glob(["**/*.proto"]),
     cc_api_version = 2,
-    go_api_version = 2,
-    java_api_version = 2,
     visibility = ["//visibility:public"],
 )

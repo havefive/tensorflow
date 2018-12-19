@@ -87,7 +87,7 @@ class EvaluatorTest(test.TestCase):
 
     e.all_metric_results(logdir)
 
-    events = summary_test_util.events_from_file(logdir)
+    events = summary_test_util.events_from_logdir(logdir)
     self.assertEqual(len(events), 2)
     self.assertEqual(events[1].summary.value[0].simple_value, 6.0)
 
@@ -117,7 +117,7 @@ class EvaluatorTest(test.TestCase):
     self.assertEqual(6.0, results["mean"].numpy())
 
   def testDatasetGraph(self):
-    with context.graph_mode(), ops.Graph().as_default(), self.test_session():
+    with context.graph_mode(), ops.Graph().as_default(), self.cached_session():
       e = SimpleEvaluator(IdentityModel())
       ds = dataset_ops.Dataset.from_tensor_slices([3.0, 5.0, 7.0, 9.0])
       init_op, call_op, results_op = e.evaluate_on_dataset(ds)
@@ -126,7 +126,7 @@ class EvaluatorTest(test.TestCase):
       self.assertEqual(6.0, results["mean"])
 
   def testWriteSummariesGraph(self):
-    with context.graph_mode(), ops.Graph().as_default(), self.test_session():
+    with context.graph_mode(), ops.Graph().as_default(), self.cached_session():
       e = SimpleEvaluator(IdentityModel())
       ds = dataset_ops.Dataset.from_tensor_slices([3.0, 5.0, 7.0, 9.0])
       training_util.get_or_create_global_step()
@@ -136,7 +136,7 @@ class EvaluatorTest(test.TestCase):
       variables.global_variables_initializer().run()
       e.run_evaluation(init_op, call_op, results_op)
 
-    events = summary_test_util.events_from_file(logdir)
+    events = summary_test_util.events_from_logdir(logdir)
     self.assertEqual(len(events), 2)
     self.assertEqual(events[1].summary.value[0].simple_value, 6.0)
 

@@ -22,3 +22,15 @@ import sys
 # pylint: disable=unused-import,wildcard-import
 from tensorflow.contrib.cudnn_rnn.python.layers.cudnn_rnn import *
 # pylint: enable=unused-import,wildcard-import
+
+from tensorflow.contrib.cudnn_rnn.python.ops.cudnn_rnn_ops import CudnnCompatibleGRUCell
+from tensorflow.contrib.cudnn_rnn.python.ops.cudnn_rnn_ops import CudnnCompatibleLSTMCell
+from tensorflow.contrib.cudnn_rnn.python.ops.cudnn_rnn_ops import CudnnGRUSaveable
+from tensorflow.contrib.cudnn_rnn.python.ops.cudnn_rnn_ops import CudnnLSTMSaveable
+from tensorflow.contrib.cudnn_rnn.python.ops.cudnn_rnn_ops import CudnnParamsFormatConverterGRU
+from tensorflow.contrib.cudnn_rnn.python.ops.cudnn_rnn_ops import CudnnParamsFormatConverterLSTM
+from tensorflow.contrib.cudnn_rnn.python.ops.cudnn_rnn_ops import CudnnParamsFormatConverterRelu
+from tensorflow.contrib.cudnn_rnn.python.ops.cudnn_rnn_ops import CudnnParamsFormatConverterTanh
+from tensorflow.contrib.cudnn_rnn.python.ops.cudnn_rnn_ops import CudnnRNNReluSaveable
+from tensorflow.contrib.cudnn_rnn.python.ops.cudnn_rnn_ops import CudnnRNNTanhSaveable
+

@@ -47,43 +47,58 @@ namespace xla {
 #define HLO_OPCODE_LIST(V)                                   \
   V(kAbs, "abs")                                             \
   V(kAdd, "add")                                             \
+  V(kAddDependency, "add-dependency")                        \
+  V(kAfterAll, "after-all", kHloOpcodeIsVariadic)            \
+  V(kAllReduce, "all-reduce")                                \
+  V(kAllToAll, "all-to-all")                                 \
   V(kAtan2, "atan2")                                         \
   V(kBatchNormGrad, "batch-norm-grad")                       \
   V(kBatchNormInference, "batch-norm-inference")             \
   V(kBatchNormTraining, "batch-norm-training")               \
   V(kBitcast, "bitcast")                                     \
+  V(kBitcastConvert, "bitcast-convert")                      \
   V(kBroadcast, "broadcast")                                 \
   V(kCall, "call", kHloOpcodeIsVariadic)                     \
   V(kCeil, "ceil")                                           \
   V(kClamp, "clamp")                                         \
+  V(kCollectivePermute, "collective-permute")                \
+  V(kClz, "count-leading-zeros")                             \
   V(kComplex, "complex")                                     \
   V(kConcatenate, "concatenate", kHloOpcodeIsVariadic)       \
+  V(kConditional, "conditional")                             \
   V(kConstant, "constant")                                   \
   V(kConvert, "convert")                                     \
   V(kConvolution, "convolution")                             \
   V(kCopy, "copy")                                           \
   V(kCos, "cosine")                                          \
-  V(kCrossReplicaSum, "cross-replica-sum")                   \
   V(kCustomCall, "custom-call")                              \
   V(kDivide, "divide")                                       \
+  V(kDomain, "domain")                                       \
   V(kDot, "dot")                                             \
   V(kDynamicSlice, "dynamic-slice")                          \
   V(kDynamicUpdateSlice, "dynamic-update-slice")             \
   V(kEq, "equal-to", kHloOpcodeIsComparison)                 \
   V(kExp, "exponential")                                     \
+  V(kExpm1, "exponential-minus-one")                         \
+  V(kFft, "fft")                                             \
   V(kFloor, "floor")                                         \
   V(kFusion, "fusion", kHloOpcodeIsVariadic)                 \
+  V(kGather, "gather")                                       \
   V(kGe, "greater-than-or-equal-to", kHloOpcodeIsComparison) \
+  V(kGetDimensionSize, "get-dimension-size")                 \
   V(kGetTupleElement, "get-tuple-element")                   \
   V(kGt, "greater-than", kHloOpcodeIsComparison)             \
   V(kImag, "imag")                                           \
   V(kInfeed, "infeed")                                       \
+  V(kIota, "iota")                                           \
   V(kIsFinite, "is-finite")                                  \
   V(kLe, "less-than-or-equal-to", kHloOpcodeIsComparison)    \
   V(kLog, "log")                                             \
+  V(kLog1p, "log-plus-one")                                  \
   V(kAnd, "and")                                             \
   V(kNot, "not")                                             \
   V(kOr, "or")                                               \
+  V(kXor, "xor")                                             \
   V(kLt, "less-than", kHloOpcodeIsComparison)                \
   V(kMap, "map", kHloOpcodeIsVariadic)                       \
   V(kMaximum, "maximum")                                     \
@@ -97,6 +112,7 @@ namespace xla {
   V(kPower, "power")                                         \
   V(kReal, "real")                                           \
   V(kRecv, "recv")                                           \
+  V(kRecvDone, "recv-done")                                  \
   V(kReduce, "reduce")                                       \
   V(kReducePrecision, "reduce-precision")                    \
   V(kReduceWindow, "reduce-window")                          \
@@ -105,9 +121,11 @@ namespace xla {
   V(kReverse, "reverse")                                     \
   V(kRng, "rng")                                             \
   V(kRoundNearestAfz, "round-nearest-afz")                   \
+  V(kScatter, "scatter")                                     \
   V(kSelect, "select")                                       \
   V(kSelectAndScatter, "select-and-scatter")                 \
   V(kSend, "send")                                           \
+  V(kSendDone, "send-done")                                  \
   V(kShiftLeft, "shift-left")                                \
   V(kShiftRightArithmetic, "shift-right-arithmetic")         \
   V(kShiftRightLogical, "shift-right-logical")               \
@@ -120,6 +138,7 @@ namespace xla {
   V(kTrace, "trace")                                         \
   V(kTranspose, "transpose")                                 \
   V(kTuple, "tuple", kHloOpcodeIsVariadic)                   \
+  V(kTupleSelect, "tuple-select")                            \
   V(kWhile, "while")
 
 enum class HloOpcode {
@@ -139,7 +158,7 @@ enum HloOpcodeProperty {
 // Returns a string representation of the opcode.
 string HloOpcodeString(HloOpcode opcode);
 
-// Returns a string representation of the opcode.
+// Retrieves the opcode enum by name if the opcode exists.
 StatusOr<HloOpcode> StringToHloOpcode(const string& opcode_name);
 
 inline std::ostream& operator<<(std::ostream& os, HloOpcode opcode) {

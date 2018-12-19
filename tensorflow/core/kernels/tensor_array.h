@@ -13,8 +13,8 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
-#ifndef TENSORFLOW_KERNELS_TENSOR_ARRAY_H_
-#define TENSORFLOW_KERNELS_TENSOR_ARRAY_H_
+#ifndef TENSORFLOW_CORE_KERNELS_TENSOR_ARRAY_H_
+#define TENSORFLOW_CORE_KERNELS_TENSOR_ARRAY_H_
 
 #include <limits.h>
 #include <vector>
@@ -81,7 +81,8 @@ Status TensorSetZero(OpKernelContext* ctx, Tensor* value) {
   Status TensorSetZero<Device, T>(OpKernelContext * ctx, Tensor * value);
 
 #define TENSOR_ARRAY_SET_ZERO_CPU(T) TENSOR_ARRAY_SET_ZERO(CPUDevice, T)
-TF_CALL_NUMBER_TYPES(TENSOR_ARRAY_SET_ZERO_CPU)
+TF_CALL_NUMBER_TYPES(TENSOR_ARRAY_SET_ZERO_CPU);
+TF_CALL_bool(TENSOR_ARRAY_SET_ZERO_CPU);
 #undef TENSOR_ARRAY_SET_ZERO_CPU
 
 #if GOOGLE_CUDA
@@ -138,8 +139,9 @@ class TensorArray : public ResourceBase {
   // users to construct this many Tensors for storage in a TensorArray.
   TensorArray(const string& key, const DataType& dtype, const Tensor& handle,
               int32 N, const PartialTensorShape& element_shape,
-              bool dynamic_size, bool multiple_writes_aggregate, bool is_grad,
-              int32 marked_size, bool clear_after_read)
+              bool identical_element_shapes, bool dynamic_size,
+              bool multiple_writes_aggregate, bool is_grad, int32 marked_size,
+              bool clear_after_read)
       : key_(key),
         dtype_(dtype),
         handle_(handle),
@@ -151,6 +153,7 @@ class TensorArray : public ResourceBase {
         is_grad_(is_grad),
         marked_size_(marked_size),
         element_shape_(element_shape),
+        identical_element_shapes_(identical_element_shapes),
         tensors_(N) {}
 
   // Write PersistentTensor 'value' to index 'index'.
@@ -320,14 +323,18 @@ class TensorArray : public ResourceBase {
     return !gradients_disallowed_;
   }
 
+  bool HasIdenticalElementShapes() const { return identical_element_shapes_; }
+
   // Copy the TensorShapes from another TensorArray into this one.
+  // If `shapes_to_prepend` is set, expands the rank of the copied shape by
+  // prepending the passed in shape prefix to the shape values in `rhs`.
   // The sizes of the two TensorArrays must match and this one
   // may not have any entries filled in.  This performs a "soft copy",
   // essentially filling the current TensorArray with virtual
   // zero-tensors, which will be replaced by future aggregate writes,
   // or instantiated by future reads.  Requires a non-const pointer
   // to the rhs to access its mutex.
-  Status CopyShapesFrom(TensorArray* rhs);
+  Status CopyShapesFrom(TensorArray* rhs, const TensorShape* shape_to_prepend);
 
   // Clear the TensorArray, including any Tensor references, and mark as closed.
   void ClearAndMarkClosed() {
@@ -379,7 +386,7 @@ class TensorArray : public ResourceBase {
 
   // Multiple writes to the same index will result in summation of the
   // values (used by backprop)
-  bool multiple_writes_aggregate_;
+  const bool multiple_writes_aggregate_;
 
   // If multiple Writes were attempted (e.g. via attribute
   // multiple_writes_aggregate), then gradients are disallowed.
@@ -387,10 +394,10 @@ class TensorArray : public ResourceBase {
 
   // After a read at an index, clear away its PersistentTensor to
   // release memory.
-  bool clear_after_read_;
+  const bool clear_after_read_;
 
   // True iff this is a gradient tensor array.
-  bool is_grad_;
+  const bool is_grad_;
 
   // The size of the TensorArray after a (legacy) unpack or split is performed.
   // -1 if there has been no unpack or split performed on the TensorArray.
@@ -399,6 +406,13 @@ class TensorArray : public ResourceBase {
   // The shape of each element in the TensorArray, may be partially known or not
   // known at all.
   PartialTensorShape element_shape_ GUARDED_BY(mu_);
+
+  // Whether all elements in the TensorArray have identical shapes.
+  // This allows certain behaviors, like dynamically checking for
+  // consistent shapes on write, and being able to fill in properly
+  // shaped zero tensors on stack -- even if the initial element_shape
+  // was not fully defined.
+  const bool identical_element_shapes_;
 
   // TensorAndState is used to keep track of the PersistentTensors
   // stored in the TensorArray, along with their shapes, and a boolean
@@ -463,6 +477,8 @@ Status TensorArray::LockedWriteOrAggregate(OpKernelContext* ctx,
         " which is incompatible with the TensorArray's inferred element "
         "shape: ",
         element_shape_.DebugString(), " (consider setting infer_shape=False).");
+  } else if (identical_element_shapes_ && !element_shape_.IsFullyDefined()) {
+    element_shape_ = PartialTensorShape(value_t->shape().dim_sizes());
   }
 
   if (t.read) {
@@ -614,4 +630,4 @@ Status TensorArray::LockedRead(OpKernelContext* ctx, const int32 index,
 
 }  // namespace tensorflow
 
-#endif  // TENSORFLOW_KERNELS_TENSOR_ARRAY_H_
+#endif  // TENSORFLOW_CORE_KERNELS_TENSOR_ARRAY_H_

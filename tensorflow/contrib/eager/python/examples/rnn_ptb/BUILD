@@ -3,6 +3,7 @@ licenses(["notice"])  # Apache 2.0
 package(default_visibility = ["//tensorflow:internal"])
 
 load("//tensorflow:tensorflow.bzl", "cuda_py_test")
+load("//tensorflow:tensorflow.bzl", "py_binary")
 
 py_binary(
     name = "rnn_ptb",
@@ -10,7 +11,9 @@ py_binary(
     srcs_version = "PY2AND3",
     deps = [
         "//tensorflow:tensorflow_py",
+        "//tensorflow/contrib/cudnn_rnn:cudnn_rnn_py",
         "//tensorflow/contrib/eager/python:tfe",
+        "//third_party/py/numpy",
     ],
 )
 

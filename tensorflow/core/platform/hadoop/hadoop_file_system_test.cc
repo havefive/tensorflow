@@ -18,6 +18,7 @@ limitations under the License.
 #include "tensorflow/core/lib/core/status_test_util.h"
 #include "tensorflow/core/lib/gtl/stl_util.h"
 #include "tensorflow/core/lib/io/path.h"
+#include "tensorflow/core/lib/strings/str_util.h"
 #include "tensorflow/core/platform/file_system.h"
 #include "tensorflow/core/platform/test.h"
 
@@ -94,6 +95,9 @@ TEST_F(HadoopFileSystemTest, WritableFile) {
   const string fname = TmpDir("WritableFile");
   TF_EXPECT_OK(hdfs.NewWritableFile(fname, &writer));
   TF_EXPECT_OK(writer->Append("content1,"));
+  int64 pos;
+  TF_EXPECT_OK(writer->Tell(&pos));
+  EXPECT_EQ(pos, 9);
   TF_EXPECT_OK(writer->Append("content2"));
   TF_EXPECT_OK(writer->Flush());
   TF_EXPECT_OK(writer->Sync());
@@ -197,7 +201,7 @@ TEST_F(HadoopFileSystemTest, WriteWhileReading) {
   // Skip the test if we're not testing on HDFS. Hadoop's local filesystem
   // implementation makes no guarantees that writable files are readable while
   // being written.
-  if (!StringPiece(fname).starts_with("hdfs://")) {
+  if (!str_util::StartsWith(fname, "hdfs://")) {
     return;
   }
 

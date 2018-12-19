@@ -13,13 +13,14 @@
 // limitations under the License.
 // =============================================================================
 
-#ifndef THIRD_PARTY_TENSORFLOW_CONTRIB_BOOSTED_TREES_LIB_UTILS_EXAMPLE_H_
-#define THIRD_PARTY_TENSORFLOW_CONTRIB_BOOSTED_TREES_LIB_UTILS_EXAMPLE_H_
+#ifndef TENSORFLOW_CONTRIB_BOOSTED_TREES_LIB_UTILS_EXAMPLE_H_
+#define TENSORFLOW_CONTRIB_BOOSTED_TREES_LIB_UTILS_EXAMPLE_H_
 
 #include <algorithm>
 #include <unordered_set>
 #include <vector>
 #include "tensorflow/contrib/boosted_trees/lib/utils/optional_value.h"
+#include "tensorflow/core/lib/gtl/inlined_vector.h"
 
 namespace tensorflow {
 namespace boosted_trees {
@@ -63,7 +64,7 @@ class SparseFloatFeatureColumn {
  public:
   void Reserve(const int32 size) {
     if (!single_dimensional_) {
-      mutlidimensional_values.Reserve(size);
+      multidimensional_values.Reserve(size);
     }
   }
 
@@ -76,7 +77,7 @@ class SparseFloatFeatureColumn {
       DCHECK_EQ(0, feature_idx);
       single_value_ = value;
     } else {
-      mutlidimensional_values.Add(feature_idx, value);
+      multidimensional_values.Add(feature_idx, value);
     }
     initialized_ = true;
   }
@@ -84,7 +85,7 @@ class SparseFloatFeatureColumn {
   void Clear() {
     single_dimensional_ = false;
     initialized_ = false;
-    mutlidimensional_values.Clear();
+    multidimensional_values.Clear();
   }
 
   OptionalValue<T> operator[](int feature_idx) const {
@@ -94,7 +95,7 @@ class SparseFloatFeatureColumn {
     if (single_dimensional_) {
       return OptionalValue<T>(single_value_);
     } else {
-      return mutlidimensional_values[feature_idx];
+      return multidimensional_values[feature_idx];
     }
   }
 
@@ -102,7 +103,7 @@ class SparseFloatFeatureColumn {
   bool single_dimensional_;
   bool initialized_;
   T single_value_;
-  SparseMultidimensionalValues<T> mutlidimensional_values;
+  SparseMultidimensionalValues<T> multidimensional_values;
 };
 
 // Holds data for one example and enables lookup by feature column.
@@ -124,11 +125,13 @@ struct Example {
   // Sparse integer features indexed by feature column.
   // Note that all integer features are assumed to be categorical, i.e. will
   // never be compared by order. Also these features can be multivalent.
-  std::vector<std::unordered_set<int64>> sparse_int_features;
+  // By default we allocate a InlinedVector of length 1 though since that is
+  // the most common case.
+  std::vector<gtl::InlinedVector<int64, 1>> sparse_int_features;
 };
 
 }  // namespace utils
 }  // namespace boosted_trees
 }  // namespace tensorflow
 
-#endif  // THIRD_PARTY_TENSORFLOW_CONTRIB_BOOSTED_TREES_LIB_UTILS_EXAMPLE_H_
+#endif  // TENSORFLOW_CONTRIB_BOOSTED_TREES_LIB_UTILS_EXAMPLE_H_

@@ -1,8 +1,7 @@
 licenses(["notice"])  # Apache 2.0
 
-load("//tensorflow:tensorflow.bzl", "py_test")
+load("//tensorflow:tensorflow.bzl", "py_test", "tf_cc_binary")
 load("//tensorflow:tensorflow.bzl", "cuda_py_test")
-load("//tensorflow:tensorflow.bzl", "tf_cc_binary")
 load(
     "//tensorflow/tools/test:performance.bzl",
     "tf_py_logged_benchmark",
@@ -14,19 +13,33 @@ cc_library(
         "pywrap_tensor.cc",
         "pywrap_tfe_src.cc",
     ],
-    hdrs = ["pywrap_tfe.h"],
-    visibility = ["//tensorflow:internal"],
+    hdrs = [
+        "pywrap_tensor.h",
+        "pywrap_tfe.h",
+    ],
+    visibility = [
+        "//learning/deepmind/courier:__subpackages__",
+        "//tensorflow:internal",
+    ],
     deps = [
         "//tensorflow/c:c_api",
+        "//tensorflow/c:c_api_internal",
         "//tensorflow/c/eager:c_api",
+        "//tensorflow/c/eager:c_api_internal",
         "//tensorflow/c/eager:tape",
+        "//tensorflow/core:framework",
         "//tensorflow/core:lib",
+        "//tensorflow/core:protos_all_cc",
+        "//tensorflow/python:cpp_python_util",
         "//tensorflow/python:ndarray_tensor",
         "//tensorflow/python:ndarray_tensor_bridge",
         "//tensorflow/python:numpy_lib",
         "//tensorflow/python:py_seq_tensor",
         "//tensorflow/python:safe_ptr",
-        "//util/python:python_headers",
+        "//third_party/py/numpy:headers",
+        "//third_party/python_runtime:headers",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/types:variant",
     ],
 )
 
@@ -38,13 +51,13 @@ py_library(
         ":backprop",
         ":context",
         ":core",
-        ":custom_gradient",
+        ":def_function",
         ":execute",
         ":function",
-        ":graph_callable",
         ":graph_only_ops",
         ":tape",
         ":test",
+        ":wrap_function",
         "//tensorflow/python:pywrap_tensorflow",
     ],
 )
@@ -56,7 +69,6 @@ py_library(
     visibility = ["//tensorflow:internal"],
     deps = [
         ":context",
-        ":memory_trace",
         "//tensorflow/python:errors",
         "//tensorflow/python:pywrap_tensorflow",
     ],
@@ -72,6 +84,7 @@ py_library(
         "//tensorflow/python:errors",
         "//tensorflow/python:platform",
         "//tensorflow/python:pywrap_tensorflow",
+        "//tensorflow/python:tf2",
         "//tensorflow/python:util",
     ],
 )
@@ -81,12 +94,6 @@ py_library(
     srcs = ["tape.py"],
     srcs_version = "PY2AND3",
     visibility = ["//tensorflow:internal"],
-)
-
-py_library(
-    name = "memory_trace",
-    srcs = ["memory_trace.py"],
-    srcs_version = "PY2AND3",
 )
 
 cuda_py_test(
@@ -106,12 +113,15 @@ cuda_py_test(
     additional_deps = [
         ":backprop",
         ":context",
-        ":custom_gradient",
         ":test",
+        "//third_party/py/numpy",
         "//tensorflow/python:embedding_ops",
         "//tensorflow/python:array_ops",
+        "//tensorflow/python:control_flow_ops",
+        "//tensorflow/python:layers",
         "//tensorflow/python:math_ops",
         "//tensorflow/python:nn_ops",
+        "//tensorflow/python:resource_variable_ops",
         "//tensorflow/python:random_ops",
         "//tensorflow/python:nn_grad",
         "//tensorflow/python:training",
@@ -136,17 +146,71 @@ cuda_py_test(
 )
 
 cuda_py_test(
+    name = "function_argument_naming_test",
+    size = "medium",
+    srcs = ["function_argument_naming_test.py"],
+    additional_deps = [
+        ":backprop",
+        ":def_function",
+        ":function",
+        ":test",
+        "@absl_py//absl/testing:parameterized",
+        "//tensorflow/python:math_ops",
+    ],
+)
+
+cuda_py_test(
+    name = "function_defun_collection_test",
+    size = "medium",
+    srcs = ["function_defun_collection_test.py"],
+    additional_deps = [
+        ":backprop",
+        ":def_function",
+        ":function",
+        ":test",
+        "@absl_py//absl/testing:parameterized",
+        "//tensorflow/python:math_ops",
+        "//tensorflow/python:resource_variable_ops",
+    ],
+)
+
+cuda_py_test(
+    name = "function_gradients_test",
+    size = "medium",
+    srcs = ["function_gradients_test.py"],
+    additional_deps = [
+        ":backprop",
+        ":context",
+        ":def_function",
+        ":function",
+        ":test",
+        "@absl_py//absl/testing:parameterized",
+        "//tensorflow/python:math_ops",
+        "//tensorflow/python:resource_variable_ops",
+    ],
+    shard_count = 5,
+)
+
+cuda_py_test(
     name = "function_test",
+    size = "medium",
     srcs = ["function_test.py"],
     additional_deps = [
         ":backprop",
         ":context",
+        ":def_function",
         ":function",
-        ":tape",
         ":test",
+        "@absl_py//absl/testing:parameterized",
+        "//tensorflow/python:test_ops",
         "//tensorflow/python:clip_ops",
+        "//tensorflow/python:init_ops",
+        "//tensorflow/python:layers",
+        "//tensorflow/python:list_ops",
         "//tensorflow/python:math_ops",
+        "//tensorflow/python:resource_variable_ops",
     ],
+    shard_count = 15,
 )
 
 py_library(
@@ -191,56 +255,15 @@ py_library(
     ],
 )
 
-cc_library(
-    name = "python_eager_op_gen",
-    srcs = ["python_eager_op_gen.cc"],
-    hdrs = ["python_eager_op_gen.h"],
-    visibility = ["//visibility:public"],
-    deps = [
-        "//tensorflow/core:framework",
-        "//tensorflow/core:lib",
-        "//tensorflow/core:lib_internal",
-        "//tensorflow/core:op_gen_lib",
-        "//tensorflow/core:proto_text",
-        "//tensorflow/core:protos_all_cc",
-        "//tensorflow/python:python_op_gen",
-    ],
-)
-
-cc_library(
-    name = "python_eager_op_gen_main",
-    srcs = [
-        "python_eager_op_gen_main.cc",
-    ],
-    visibility = ["//visibility:public"],
-    deps = [
-        ":python_eager_op_gen",
-        "//tensorflow/core:framework",
-        "//tensorflow/core:lib",
-        "//tensorflow/core:protos_all_cc",
-    ],
-)
-
-tf_cc_binary(
-    name = "python_eager_op_gen_demo",
-    deps = [
-        ":python_eager_op_gen_main",
-        "//tensorflow/core:ops",
-    ],
-)
-
-py_library(
-    name = "custom_gradient",
-    srcs = ["custom_gradient.py"],
+py_test(
+    name = "execution_callbacks_test",
+    srcs = ["execution_callbacks_test.py"],
     srcs_version = "PY2AND3",
-    visibility = ["//tensorflow:internal"],
     deps = [
-        ":context",
-        ":tape",
-        "//tensorflow/python:array_ops",
+        ":execution_callbacks",
+        "//tensorflow/python:client_testlib",
         "//tensorflow/python:framework_ops",
-        "//tensorflow/python:resource_variable_ops",
-        "//tensorflow/python:util",
+        "//tensorflow/python:math_ops",
     ],
 )
 
@@ -291,7 +314,8 @@ py_library(
         "//tensorflow/python:dtypes",
         "//tensorflow/python:errors",
         "//tensorflow/python:framework_ops",
-        "//tensorflow/python:gradients",
+        "//tensorflow/python:func_graph",
+        "//tensorflow/python:gradients_impl",
         "//tensorflow/python:graph_to_function_def",
         "//tensorflow/python:util",
         "//tensorflow/python/eager:context",
@@ -299,41 +323,7 @@ py_library(
         "//tensorflow/python/eager:execute",
         "//tensorflow/python/eager:tape",
         "//third_party/py/numpy",
-    ],
-)
-
-py_library(
-    name = "graph_callable",
-    srcs = ["graph_callable.py"],
-    srcs_version = "PY2AND3",
-    visibility = ["//tensorflow:internal"],
-    deps = [
-        "//tensorflow/python:array_ops",
-        "//tensorflow/python:dtypes",
-        "//tensorflow/python:errors",
-        "//tensorflow/python:framework_ops",
-        "//tensorflow/python:resource_variable_ops",
-        "//tensorflow/python:util",
-        "//tensorflow/python:variable_scope",
-        "//tensorflow/python/eager:context",
-        "//tensorflow/python/eager:function",
-        "//tensorflow/python/eager:tape",
-    ],
-)
-
-py_test(
-    name = "graph_callable_test",
-    srcs = ["graph_callable_test.py"],
-    srcs_version = "PY2AND3",
-    deps = [
-        ":backprop",
-        ":graph_callable",
-        "//tensorflow/python:dtypes",
-        "//tensorflow/python:function",
-        "//tensorflow/python:init_ops",
-        "//tensorflow/python:math_ops",
-        "//tensorflow/python:variable_scope",
-        "//tensorflow/python/eager:test",
+        "@six_archive//:six",
     ],
 )
 
@@ -352,10 +342,12 @@ py_library(
         "//tensorflow/python:math_ops",
         "//tensorflow/python:pywrap_tensorflow",
         "//tensorflow/python:tensor_shape",
+        "//tensorflow/python:unconnected_gradients",
         "//tensorflow/python:util",
         "//tensorflow/python/eager:context",
         "//tensorflow/python/eager:execute",
         "//tensorflow/python/eager:tape",
+        "//tensorflow/python/ops/parallel_for:control_flow_ops",
         "@six_archive//:six",
     ],
 )
@@ -372,6 +364,7 @@ cuda_py_test(
         "//tensorflow/python:math_ops",
         "//tensorflow/python:pywrap_tensorflow",
         "//tensorflow/python:random_ops",
+        "//tensorflow/python/keras",
     ],
 )
 
@@ -387,7 +380,6 @@ py_test(
     deps = [
         ":backprop",
         ":context",
-        ":custom_gradient",
         ":test",
         "//tensorflow/python:array_ops",
         "//tensorflow/python:constant_op",
@@ -416,28 +408,136 @@ cuda_py_test(
         "//tensorflow/python:layers",
         "//tensorflow/python:math_ops",
         "//tensorflow/python:random_ops",
+        "//tensorflow/python:resource_variable_ops",
         "//tensorflow/python:sparse_ops",
         "//tensorflow/python:tensor_shape",
     ],
 )
 
-# -----------------------------------------------------------------------------
-# Google-internal targets.
-
-filegroup(
-    name = "all_files",
-    srcs = glob(
-        ["**/*"],
-        exclude = [
-            "**/METADATA",
-            "**/OWNERS",
-        ],
-    ),
-    visibility = ["//tensorflow:__subpackages__"],
+py_test(
+    name = "pywrap_tfe_test",
+    srcs = ["pywrap_tfe_test.py"],
+    srcs_version = "PY2AND3",
+    deps = [
+        ":backprop",
+        ":context",
+        ":core",
+        ":test",
+        "//tensorflow/python:framework_test_lib",
+        "//tensorflow/python:math_ops",
+        "//tensorflow/python:pywrap_tensorflow",
+        "//tensorflow/python:random_ops",
+        "//third_party/py/numpy",
+    ],
 )
 
 py_library(
     name = "imperative_grad",
     srcs = ["imperative_grad.py"],
     srcs_version = "PY2AND3",
+    deps = [
+        "//tensorflow/python:pywrap_tensorflow",
+        "//tensorflow/python:unconnected_gradients",
+        "//tensorflow/python:util",
+    ],
+)
+
+cuda_py_test(
+    name = "memory_test",
+    size = "medium",
+    srcs = ["memory_test.py"],
+    additional_deps = [
+        "//tensorflow/python/eager:backprop",
+        "//tensorflow/python/keras",
+        "//tensorflow/python/eager:test",
+        "//tensorflow/python:array_ops",
+        "//tensorflow/python:client_testlib",
+        "//tensorflow/python:framework_test_lib",
+        "@six_archive//:six",
+    ],
+    tags = [
+        "optonly",  # The test is too slow in non-opt mode
+    ],
+)
+
+py_library(
+    name = "def_function",
+    srcs = ["def_function.py"],
+    srcs_version = "PY2AND3",
+    visibility = ["//tensorflow:internal"],
+    deps = [
+        ":context",
+        ":function",
+        ":lift_to_graph",
+        "//tensorflow/python:cond_v2",  # TODO(b/118513001): Imported via control_flow_ops; remove.
+        "//tensorflow/python:control_flow_ops",
+        "//tensorflow/python:framework_ops",
+        "//tensorflow/python:resource_variable_ops",
+        "//tensorflow/python:util",
+        "//tensorflow/python:variable_scope",
+        "//tensorflow/python:while_v2",  # TODO(b/118513001): Imported via control_flow_ops; remove.
+        "//tensorflow/python/training/checkpointable:base",
+    ],
+)
+
+py_library(
+    name = "lift_to_graph",
+    srcs = ["lift_to_graph.py"],
+    srcs_version = "PY2AND3",
+    visibility = ["//tensorflow:internal"],
+    deps = [
+        ":context",
+        "//tensorflow/python:framework_ops",
+    ],
+)
+
+py_test(
+    name = "def_function_test",
+    srcs = ["def_function_test.py"],
+    srcs_version = "PY2AND3",
+    deps = [
+        ":def_function",
+        "//tensorflow/python:client_testlib",
+        "//tensorflow/python:constant_op",
+        "//tensorflow/python:framework_ops",
+    ],
+)
+
+py_library(
+    name = "wrap_function",
+    srcs = ["wrap_function.py"],
+    srcs_version = "PY2AND3",
+    visibility = ["//tensorflow:internal"],
+    deps = [
+        ":context",
+        ":function",
+        ":lift_to_graph",
+        "//tensorflow/python:framework_ops",
+        "//tensorflow/python:template",
+        "//tensorflow/python:variable_scope",
+        "//tensorflow/python/training/checkpointable:base",
+    ],
+)
+
+py_test(
+    name = "wrap_function_test",
+    srcs = ["wrap_function_test.py"],
+    srcs_version = "PY2AND3",
+    deps = [
+        ":wrap_function",
+        "//tensorflow/python:client_testlib",
+        "//tensorflow/python:framework_ops",
+    ],
+)
+
+py_library(
+    name = "remote",
+    srcs = ["remote.py"],
+    srcs_version = "PY2AND3",
+    visibility = ["//tensorflow:internal"],
+    deps = [
+        "//tensorflow/core:protos_all_py",
+        "//tensorflow/python:platform",
+        "//tensorflow/python/eager:context",
+    ],
 )
